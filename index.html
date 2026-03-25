@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>课堂多媒体控制系统 (全屏版)</title>
+    <style>
+        body { margin: 0; padding: 0; font-family: 'Segoe UI', sans-serif; background: #1a1a1a; color: #fff; overflow: hidden; }
+        #display-area {
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            display: flex; justify-content: center; align-items: center;
+            background: #000; z-index: 1;
+        }
+        #display-area img, #display-area video {
+            max-width: 100%; max-height: 100%; object-fit: contain;
+            display: none; /* 默认隐藏，加载完或激活时显示 */
+        }
+        #display-area.active img, #display-area.active video { display: block; }
+        
+        /* 控制层样式 */
+        #control-panel {
+            position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.8); padding: 15px 25px; border-radius: 12px;
+            z-index: 10; display: flex; gap: 15px; align-items: center;
+            backdrop-filter: blur(5px); border: 1px solid #444;
+        }
+        .btn {
+            background: #4CAF50; color: white; border: none; padding: 8px 16px;
+            border-radius: 6px; cursor: pointer; font-size: 14px; transition: 0.2s;
+        }
+        .btn:hover { background: #45a049; }
+        .btn.secondary { background: #2196F3; }
+        .btn.danger { background: #f44336; }
+        
+        #status-bar {
+            position: fixed; top: 10px; left: 10px; z-index: 10;
+            background: rgba(0,0,0,0.6); padding: 5px 10px; border-radius: 4px;
+            font-size: 12px; color: #aaa;
+        }
+        .loading-tip { color: #ffeb3b; font-weight: bold; }
+        
+        /* 资源调度中心 (简化版卡片) */
+        #scheduler {
+            position: fixed; top: 10px; right: 10px; z-index: 10;
+            background: rgba(30, 30, 30, 0.9); padding: 10px; border-radius: 8px;
+            max-width: 300px; font-size: 13px;
+        }
+        .card {
+            background: #333; padding: 8px; margin-bottom: 5px; border-radius: 4px;
+            cursor: pointer; border: 1px solid transparent;
+        }
+        .card:hover { border-color: #4CAF50; background: #444; }
+        .card.active { border-color: #ffeb3b; background: #555; }
+    </style>
+</head>
+<body>
+
+    <!-- 显示区域 -->
+    <div id="display-area">
+        <!-- 图片容器 -->
+        <img id="main-image" src="" alt="Content">
+        <!-- 视频容器 -->
+        <video id="main-video" src="" loop muted playsinline></video>
+    </div>
+
+    <!-- 状态栏 -->
+    <div id="status-bar">
+        <div>房间号：CLASS20241</div>
+        <div id="load-status">正在预加载资源...</div>
+        <div id="mode-status">🔄 模式：初始化</div>
+    </div>
+
+    <!-- 资源调度中心 -->
+    <div id="scheduler">
+        <strong>🎛️ 资源调度中心</strong>
+        <div class="card" onclick="startSlideshow()">🖼️ 自动轮播 (001-005)</div>
+        <div class="card" onclick="showSingle('images2/A.jpg')">🖼️ 展示组 A (A.jpg)</div>
+        <div class="card" onclick="showSingle('images3/B.jpg')">🖼️ 展示组 B (B.jpg)</div>
+        <div class="card" onclick="playVideo('videos/A1.mp4')">🎥 视频循环 (A1.mp4)</div>
+    </div>
+
+    <!-- 控制栏 -->
+    <div id="control-panel">
+        <button class="btn" onclick="togglePlay()">⏯️ 播放/暂停</button>
+        <button class="btn danger" onclick="stopAll()">⏹️ 停止/黑屏</button>
+        <button class="btn secondary" onclick="toggleFullscreen()">📺 全屏</button>
+    </div>
+
+<script>
+    // === 配置区域 ===
+    const SLIDESHOW_IMAGES = [
+        'images/001.jpg',
+        'images/002.jpg',
+        'images/003.jpg',
+        'images/004.jpg',
+        'images/005.jpg'
+    ];
+    const SLIDE_INTERVAL = 5000; // 5秒
+
+    // === 核心变量 ===
+    let currentMode = 'idle'; // idle, slideshow, single, video
+    let slideTimer = null;
+    let currentSlideIndex = 0;
+    let isPlaying = true;
+    
+    // 预加载缓存对象
+    const preloadCache = {
+        images: {},
+        videos: {}
+    };
+
+    const dom = {
+        img: document.getElementById('main-image'),
+        video: document.getElementById('main-video'),
+        area: document.getElementById('display-area'),
+        status: document.getElementById('load-status'),
+        mode: document.getElementById('mode-status')
+    };
+
+    // === 1. 预加载核心功能 ===
+    function initPreloader() {
+        let loadedCount = 0;
+        let totalAssets = SLIDESHOW_IMAGES.length + 2; // 轮播图 + A.jpg + B.jpg + 1个视频
+
+        // 预加载轮播图片
+        SLIDESHOW_IMAGES.forEach((src, index) => {
+            const img = new Image();
+            img.src = src;
+            img.onload = () => checkLoadComplete(++loadedCount, totalAssets);
+            img.onerror = () => {
+                console.warn(`加载失败: ${src}`);
+                checkLoadComplete(++loadedCount, totalAssets); // 即使失败也计数，防止卡死
+            };
+            preloadCache.images[src] = img;
+        });
+
+        // 预加载静态图片
+        ['images2/A.jpg', 'images3/B.jpg'].forEach(src => {
+            const img = new Image();
+            img.src = src;
+            img.onload = () => checkLoadComplete(++loadedCount, totalAssets);
+            img.onerror = () => checkLoadComplete(++loadedCount, totalAssets);
+            preloadCache.images[src] = img;
+        });
+
+        // 预加载视频 (只加载元数据，不下载全部内容以节省初始流量，但确保能迅速播放)
+        const vid = document.createElement('video');
+        vid.src = 'videos/A1.mp4';
+        vid.preload = 'auto'; 
+        vid.onloadeddata = () => checkLoadComplete(++loadedCount, totalAssets);
+        vid.onerror = () => checkLoadComplete(++loadedCount, totalAssets);
+        preloadCache.videos['videos/A1.mp4'] = vid;
+    }
+
+    function checkLoadComplete(current, total) {
+        if (current >= total) {
+            dom.status.innerHTML = '<span style="color:#4CAF50">✅ 资源已就绪 (预加载完成)</span>';
+            // 可选：自动开始轮播
+            // startSlideshow(); 
+        } else {
+            dom.status.innerText = `正在预加载资源... (${current}/${total})`;
+        }
+    }
+
+    // === 2. 显示控制逻辑 ===
+
+    function clearDisplay() {
+        dom.area.classList.remove('active');
+        dom.img.style.display = 'none';
+        dom.video.style.display = 'none';
+        dom.video.pause();
+        if (slideTimer) clearInterval(slideTimer);
+    }
+
+    function showImageElement(src) {
+        clearDisplay();
+        // 如果缓存中有，直接用缓存（瞬间显示），否则用原生 src（兜底）
+        if (preloadCache.images[src]) {
+            dom.img.src = preloadCache.images[src].src;
+        } else {
+            dom.img.src = src;
+        }
+        dom.img.style.display = 'block';
+        dom.area.classList.add('active');
+    }
+
+    function showVideoElement(src) {
+        clearDisplay();
+        if (preloadCache.videos[src]) {
+            dom.video.src = preloadCache.videos[src].src;
+        } else {
+            dom.video.src = src;
+        }
+        dom.video.style.display = 'block';
+        dom.video.play().catch(e => console.log("需用户交互才能播放音频"));
+        dom.area.classList.add('active');
+    }
+
+    // === 3. 业务功能函数 ===
+
+    function startSlideshow() {
+        currentMode = 'slideshow';
+        dom.mode.innerText = '🔄 模式：自动轮播';
+        currentSlideIndex = 0;
+        
+        // 立即显示第一张
+        renderSlide();
+        
+        if (slideTimer) clearInterval(slideTimer);
+        slideTimer = setInterval(() => {
+            if (!isPlaying) return;
+            currentSlideIndex = (currentSlideIndex + 1) % SLIDESHOW_IMAGES.length;
+            renderSlide();
+        }, SLIDE_INTERVAL);
+    }
+
+    function renderSlide() {
+        const src = SLIDESHOW_IMAGES[currentSlideIndex];
+        showImageElement(src);
+    }
+
+    function showSingle(src) {
+        currentMode = 'single';
+        dom.mode.innerText = `🖼️ 模式：静态展示 (${src})`;
+        if (slideTimer) clearInterval(slideTimer);
+        showImageElement(src);
+    }
+
+    function playVideo(src) {
+        currentMode = 'video';
+        dom.mode.innerText = `🎥 模式：视频循环 (${src})`;
+        if (slideTimer) clearInterval(slideTimer);
+        showVideoElement(src);
+    }
+
+    function togglePlay() {
+        isPlaying = !isPlaying;
+        if (currentMode === 'video') {
+            if (isPlaying) dom.video.play();
+            else dom.video.pause();
+        }
+        dom.mode.innerText += isPlaying ? ' (播放中)' : ' (已暂停)';
+    }
+
+    function stopAll() {
+        currentMode = 'idle';
+        dom.mode.innerText = '⏹️ 模式：停止';
+        clearDisplay();
+        isPlaying = false;
+    }
+
+    function toggleFullscreen() {
+        if (!document.fullscreenElement) {
+            document.documentElement.requestFullscreen().catch(err => {
+                alert(`无法进入全屏: ${err.message}`);
+            });
+        } else {
+            document.exitFullscreen();
+        }
+    }
+
+    // === 初始化 ===
+    window.onload = function() {
+        initPreloader();
+        // 默认先不自动播放，等待用户点击，或者取消注释下面这行自动开始
+        // startSlideshow(); 
+        dom.status.innerText = "系统就绪，请点击下方卡片开始";
+    };
+
+</script>
+</body>
+</html>
