@@ -2,406 +2,373 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>智能大屏轮播系统</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>课堂多媒体控制系统 (5池版)</title>
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
     <style>
-        body, html {
-            margin: 0;
-            padding: 0;
-            width: 100%;
-            height: 100%;
-            overflow: hidden;
-            background-color: #000;
-            font-family: 'Arial', sans-serif;
-        }
-
-        #screen {
-            width: 100%;
-            height: 100%;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            position: relative;
-        }
-
-        #mainImage {
-            max-width: 100%;
-            max-height: 100%;
-            object-fit: contain;
-            display: block;
-            opacity: 0; /* 初始隐藏，加载完成后淡入 */
-            transition: opacity 0.5s ease-in-out;
-        }
-
-        #mainImage.loaded {
-            opacity: 1;
-        }
-
-        #status-bar {
-            position: absolute;
-            bottom: 20px;
-            right: 20px;
-            background: rgba(0, 0, 0, 0.7);
-            color: #fff;
-            padding: 10px 20px;
-            border-radius: 8px;
-            font-size: 16px;
-            pointer-events: none;
-            z-index: 100;
-            backdrop-filter: blur(4px);
-            border: 1px solid rgba(255,255,255,0.2);
-        }
-
-        #loading-overlay {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: #000;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            color: #fff;
-            z-index: 99;
-            transition: opacity 0.5s;
-        }
+        body { margin: 0; padding: 0; overflow: hidden; background: #000; color: #fff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; width: 100vw; height: 100vh; }
+        #status-bar { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.7); padding: 8px 15px; border-radius: 20px; font-size: 14px; z-index: 1000; display: flex; align-items: center; gap: 8px; backdrop-filter: blur(5px); border: 1px solid #333; }
+        .dot { width: 10px; height: 10px; border-radius: 50%; background: #f00; transition: background 0.3s; }
+        .dot.connected { background: #0f0; box-shadow: 0 0 8px #0f0; }
         
-        .hidden {
-            opacity: 0;
-            pointer-events: none;
+        #screen { width: 100vw; height: 100vh; display: flex; justify-content: center; align-items: center; flex-direction: column; position: relative; overflow: hidden; }
+        #media-container { width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; position: relative; overflow: hidden; }
+        
+        /* 🔥 核心：全屏铺满，无黑边 */
+        img, video { 
+            width: 100%; 
+            height: 100%; 
+            object-fit: cover; 
+            object-position: center; 
+            animation: fadeIn 0.5s ease; 
+            display: block; 
         }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        
+        #placeholder-text { text-align: center; color: #888; z-index: 10; }
+        
+        #mode-indicator { 
+            position: absolute; top: 20px; left: 20px; background: rgba(0,0,0,0.6); 
+            padding: 8px 16px; border-radius: 6px; border-left: 4px solid #fff; 
+            font-size: 14px; font-weight: bold; display: none; z-index: 100; 
+            pointer-events: none; backdrop-filter: blur(4px);
+        }
+        #mode-indicator.active { display: block; }
+        #mode-indicator.slideshow { border-color: #00BCD4; color: #00BCD4; }
+        #mode-indicator.static-a { border-color: #FF9800; color: #FF9800; }
+        #mode-indicator.static-b { border-color: #9C27B0; color: #9C27B0; }
+        #mode-indicator.video-1 { border-color: #F44336; color: #F44336; }
+        #mode-indicator.video-2 { border-color: #E91E63; color: #E91E63; } /* 新颜色 */
+
+        .error-box { background: rgba(244, 67, 54, 0.95); color: white; padding: 30px; border-radius: 10px; text-align: left; max-width: 700px; font-family: monospace; font-size: 14px; line-height: 1.6; border: 2px solid #ff5252; box-shadow: 0 10px 30px rgba(0,0,0,0.5); z-index: 200; position: relative; }
+        .error-title { font-weight: bold; font-size: 20px; margin-bottom: 15px; display: block; color: #ffcdd2; }
+        .error-url { word-break: break-all; background: rgba(0,0,0,0.4); padding: 10px; border-radius: 4px; display: block; margin-top: 5px; color: #fff; }
+        .error-tip { font-size: 13px; color: #ffebee; margin-top: 15px; display: block; font-family: -apple-system, sans-serif; background: rgba(255,255,255,0.1); padding: 10px; border-radius: 5px; }
+
+        #mobile-ui { display: none; padding: 20px; height: 100vh; box-sizing: border-box; overflow-y: auto; background: #121212; }
+        .card { background: #1e1e1e; padding: 20px; border-radius: 16px; margin-bottom: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.4); border: 1px solid #333; }
+        h2 { margin-top: 0; color: #fff; font-size: 18px; display: flex; align-items: center; gap: 10px; }
+        h3 { color: #aaa; font-size: 14px; margin: 15px 0 10px; text-transform: uppercase; letter-spacing: 1px; }
+        
+        input[type="text"] { width: 100%; padding: 15px; margin: 10px 0; background: #2c2c2c; border: 1px solid #444; color: #fff; border-radius: 10px; font-size: 16px; box-sizing: border-box; outline: none; text-align: center; }
+        
+        button { width: 100%; padding: 15px; margin: 8px 0; border: none; border-radius: 10px; font-size: 16px; font-weight: bold; cursor: pointer; color: white; transition: all 0.2s; }
+        button:active { transform: scale(0.98); }
+        .btn-connect { background: linear-gradient(135deg, #2196F3, #1976D2); }
+        
+        .btn-mode { display: flex; justify-content: space-between; align-items: center; padding: 20px; font-size: 18px; margin-bottom: 15px; border: 2px solid transparent; }
+        .btn-mode:hover { filter: brightness(1.1); }
+        .btn-mode.active { border-color: #fff; box-shadow: 0 0 15px rgba(255,255,255,0.2); }
+        
+        .bg-slideshow { background: linear-gradient(135deg, #00BCD4, #0097A7); }
+        .bg-static-a { background: linear-gradient(135deg, #FF9800, #F57C00); }
+        .bg-static-b { background: linear-gradient(135deg, #9C27B0, #7B1FA2); }
+        .bg-video-1 { background: linear-gradient(135deg, #F44336, #D32F2F); }
+        .bg-video-2 { background: linear-gradient(135deg, #E91E63, #C2185B); } /* 新按钮颜色 */
+
+        .control-group { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-top: 10px; }
+        .btn-play { background: #4CAF50; }
+        .btn-pause { background: #FF9800; }
+        .btn-stop { background: #607D8B; }
+
+        .slider-container { margin-top: 15px; background: #252525; padding: 15px; border-radius: 10px; }
+        .slider-label { display: flex; justify-content: space-between; margin-bottom: 10px; font-size: 14px; color: #ccc; }
+        input[type=range] { width: 100%; accent-color: #00BCD4; }
+
+        .hidden { display: none !important; }
+        .file-list { font-size: 12px; color: #888; margin-top: 5px; padding: 5px; background: #252525; border-radius: 5px; }
     </style>
 </head>
 <body>
 
-    <!-- 加载遮罩 -->
-    <div id="loading-overlay">
-        <div>系统初始化中...</div>
+    <div id="status-bar">
+        <div class="dot" id="conn-dot"></div>
+        <span id="status-text">正在连接服务器...</span>
     </div>
 
-    <!-- 主屏幕 -->
+    <!-- 大屏显示区域 -->
     <div id="screen">
-        <img id="mainImage" src="" alt="Slideshow Content">
+        <div id="media-container">
+            <div id="placeholder-text">
+                <h1>系统就绪</h1>
+                <p>房间号：<strong style="color:#4CAF50;" id="pc-room-code-display">CLASS2024</strong></p>
+                <p style="font-size:12px; color:#666;">按 F11 进入真正全屏 (无黑边)</p>
+            </div>
+            <div id="mode-indicator">🔄 模式：未知</div>
+        </div>
     </div>
 
-    <!-- 状态栏 -->
-    <div id="status-bar">⏳ 等待指令...</div>
+    <!-- 手机端控制界面 -->
+    <div id="mobile-ui">
+        <div class="card">
+            <h2>📱 连接控制台</h2>
+            <input type="text" id="room-input" value="CLASS2024" readonly style="background:#333; color:#aaa;">
+            <button class="btn-connect" onclick="joinRoom()">🔗 连接大屏</button>
+            <div id="mobile-status" style="text-align: center; margin-top: 10px; font-size: 14px; color: #aaa;"></div>
+        </div>
 
-    <!-- MQTT 库 (使用 CDN) -->
-    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+        <div class="card hidden" id="control-panel">
+            <h2>🎛️ 资源调度中心 (5路)</h2>
+            <p style="font-size:12px; color:#888;">点击卡片切换大屏内容 (全屏铺满)</p>
+
+            <!-- 1. 轮播 -->
+            <button class="btn-mode bg-slideshow" onclick="switchMode('slideshow')" id="btn-mode-slideshow">
+                <span>🖼️ 自动轮播 (001-005)</span>
+                <span>▶️</span>
+            </button>
+            <div id="panel-slideshow" class="hidden" style="margin-bottom: 20px; padding: 10px; background: #252525; border-radius: 10px;">
+                <div class="slider-container">
+                    <div class="slider-label"><span>轮播速度</span><span id="speed-value">5 秒</span></div>
+                    <input type="range" min="1" max="10" step="1" value="5" oninput="updateSpeed(this.value)">
+                </div>
+                <div class="file-list">队列: 001.jpg → 005.jpg</div>
+            </div>
+
+            <!-- 2. 常驻 A -->
+            <button class="btn-mode bg-static-a" onclick="switchMode('staticA')" id="btn-mode-staticA">
+                <span>🖼️ 展示组 A (A.jpg)</span>
+                <span>📄</span>
+            </button>
+            <div id="panel-staticA" class="hidden file-list">文件: images2/A.jpg</div>
+
+            <!-- 3. 常驻 B -->
+            <button class="btn-mode bg-static-b" onclick="switchMode('staticB')" id="btn-mode-staticB">
+                <span>🖼️ 展示组 B (B.jpg)</span>
+                <span>📄</span>
+            </button>
+            <div id="panel-staticB" class="hidden file-list">文件: images3/B.jpg</div>
+
+            <!-- 4. 视频 A -->
+            <button class="btn-mode bg-video-1" onclick="switchMode('video1')" id="btn-mode-video1">
+                <span>🎥 视频组 A (A1.mp4)</span>
+                <span>🔄</span>
+            </button>
+            <div id="panel-video1" class="hidden file-list">文件: videos/A1.mp4</div>
+
+            <!-- 5. 视频 B (新增) -->
+            <button class="btn-mode bg-video-2" onclick="switchMode('video2')" id="btn-mode-video2">
+                <span>🎥 视频组 B (B1.mp4)</span>
+                <span>🔄</span>
+            </button>
+            <div id="panel-video2" class="hidden file-list">文件: videos2/B1.mp4</div>
+
+            <h3>⏯️ 全局播放控制</h3>
+            <div class="control-group">
+                <button class="btn-play" onclick="sendCmd('play')">播放</button>
+                <button class="btn-pause" onclick="sendCmd('pause')">暂停</button>
+                <button class="btn-stop" onclick="sendCmd('stop')">停止</button>
+            </div>
+        </div>
+    </div>
 
     <script>
-        // ================= 配置区域 =================
-        const CONFIG = {
-            // MQTT 配置 (请根据实际环境修改)
-            mqttBroker: 'wss://broker.emqx.io:8083/mqtt', // 示例公共 Broker，生产环境请替换
-            mqttTopic: 'digital-signage/control',         // 控制主题
-            mqttClientID: 'screen_' + Math.random().toString(16).substr(2, 8),
-            
-            // 轮播配置
-            slideInterval: 5000, // 5秒
-            imageFolder: 'images/',
-            // 自动扫描 images 文件夹下的文件需要后端支持，这里暂时手动列出或使用通配符逻辑
-            // 为了演示，我们假设文件名是 001.jpg 到 099.jpg，或者你可以在下方手动列表
-            fileList: [] 
-        };
+        // ================= ⚙️ 配置区域 (已添加 videos2) =================
+        const FIXED_ROOM_ID = "CLASS2024"; 
 
-        // ================= 全局状态 =================
-        let state = {
-            currentMode: 'none', // 'none' | 'slideshow' | 'video'
-            currentSlideIndex: -1,
-            isPreloading: false,
-            nextSlidePending: false,
-            slideshowTimer: null,
-            preloadImg: new Image()
-        };
+        const LIST_SLIDESHOW = [ "001.jpg", "002.jpg", "003.jpg", "004.jpg", "005.jpg" ];
+        const LIST_STATIC_A = ["A.jpg"];
+        const LIST_STATIC_B = ["B.jpg"];
+        
+        // 视频组 A
+        const LIST_VIDEO_1 = ["A1.mp4"];
+        
+        // 视频组 B (新增)
+        const LIST_VIDEO_2 = ["B1.mp4"]; 
+        // ============================================================
 
-        // DOM 元素
-        const dom = {
-            mainImg: document.getElementById('mainImage'),
-            status: document.getElementById('status-bar'),
-            overlay: document.getElementById('loading-overlay')
-        };
-
-        // ================= 初始化逻辑 =================
-        window.addEventListener('DOMContentLoaded', async () => {
-            console.log("🚀 系统启动...");
-            
-            // 1. 尝试获取图片列表 (如果有后端 API 最好，这里模拟生成或手动指定)
-            // 注意：浏览器无法直接读取本地文件夹列表，通常需要后端 API 或手动配置
-            // 如果你有 filelist.json，可以在这里 fetch
-            await loadImageList();
-
-            // 2. 恢复上次状态
-            restoreState();
-
-            // 3. 初始化 MQTT
-            initMQTT();
-
-            // 4. 移除加载遮罩
-            setTimeout(() => {
-                dom.overlay.classList.add('hidden');
-                if (state.currentMode === 'none' && CONFIG.fileList.length > 0) {
-                    dom.status.innerText = "✅ 就绪 (等待自动轮播指令)";
-                    // 如果恢复了轮播模式，直接启动
-                    if (localStorage.getItem('lastMode') === 'slideshow') {
-                        switchMode('slideshow');
-                    }
-                }
-            }, 1000);
-        });
-
-        // ================= 核心功能函数 =================
-
-        // 模拟/加载图片列表
-        async function loadImageList() {
-            // 方案 A: 如果你有 filelist.json
-            try {
-                // const res = await fetch('filelist.json');
-                // CONFIG.fileList = await res.json();
-                
-                // 方案 B: 临时硬编码测试 (请根据实际情况修改，或替换为真实列表)
-                // 这里生成 001.jpg 到 010.jpg 作为示例
-                for (let i = 1; i <= 10; i++) {
-                    CONFIG.fileList.push(i.toString().padStart(3, '0') + '.jpg');
-                }
-                console.log(`📋 已加载 ${CONFIG.fileList.length} 张图片:`, CONFIG.fileList);
-            } catch (e) {
-                console.error("❌ 加载图片列表失败", e);
-                dom.status.innerText = "❌ 图片列表加载失败";
+        let client = null;
+        let isConnected = false;
+        let slideshowTimer = null;
+        let currentSlideIndex = -1;
+        let currentMode = 'none';
+        let currentSpeed = 5000;
+        
+        const isController = new URLSearchParams(window.location.search).get('role') === 'controller';
+        const statusText = document.getElementById('status-text');
+        const connDot = document.getElementById('conn-dot');
+        const mobileUi = document.getElementById('mobile-ui');
+        const mediaContainer = document.getElementById('media-container');
+        const placeholderText = document.getElementById('placeholder-text');
+        const roomInput = document.getElementById('room-input');
+        const mobileStatus = document.getElementById('mobile-status');
+        const modeIndicator = document.getElementById('mode-indicator');
+        
+        function init() {
+            if (isController) {
+                document.getElementById('screen').classList.add('hidden');
+                mobileUi.style.display = 'block';
+            } else {
+                connectToBroker(FIXED_ROOM_ID, false);
             }
         }
 
-        // 恢复状态
-        function restoreState() {
-            const savedMode = localStorage.getItem('lastMode');
-            const savedIndex = parseInt(localStorage.getItem('lastSlideIndex') || '-1');
-            
-            if (savedMode) {
-                console.log(`🔄 检测到上次模式: ${savedMode}, 索引: ${savedIndex}`);
-                state.currentMode = savedMode;
-                state.currentSlideIndex = savedIndex;
-                
-                // 如果是轮播模式，先显示最后一张图，但不启动定时器（等 MQTT 或手动触发）
-                if (savedMode === 'slideshow' && CONFIG.fileList[savedIndex]) {
-                    const imgUrl = CONFIG.imageFolder + CONFIG.fileList[savedIndex];
-                    dom.mainImg.src = imgUrl;
-                    dom.mainImg.classList.add('loaded');
-                    dom.status.innerText = `📸 恢复显示: ${CONFIG.fileList[savedIndex]}`;
+        function connectToBroker(roomId, isCtrl) {
+            const host = 'wss://broker.hivemq.com:8884/mqtt'; 
+            const clientId = 'sys_' + (isCtrl ? 'mob_' : 'scr_') + Math.random().toString(16).substr(2, 8);
+            const topic = 'class_room/' + roomId;
+            statusText.innerText = "连接云端...";
+            client = mqtt.connect(host, { clientId, clean: true, connectTimeout: 10000, reconnectPeriod: 2000 });
+            client.on('connect', () => {
+                statusText.innerText = "已在线";
+                connDot.classList.add('connected');
+                isConnected = true;
+                client.subscribe(topic);
+                if (!isCtrl) {
+                    placeholderText.innerHTML = "<h1>✅ 系统就绪 (5路媒体)</h1><p>房间号：" + roomId + "</p>";
+                } else {
+                    mobileStatus.innerText = "✅ 连接成功";
+                    mobileStatus.style.color = "#4CAF50";
+                    document.getElementById('control-panel').classList.remove('hidden');
                 }
-            }
+            });
+            client.on('message', (topic, message) => {
+                if (!isController) {
+                    try { handleData(JSON.parse(message.toString())); } catch (e) { console.error(e); }
+                }
+            });
+            client.on('error', () => { connDot.classList.remove('connected'); statusText.innerText = "错误"; });
         }
 
-        // 模式切换 (被 MQTT 调用)
+        function joinRoom() {
+            mobileStatus.innerText = "连接中...";
+            connectToBroker(roomInput.value.trim().toUpperCase(), true);
+        }
+
+        function sendCmd(cmd, extra = {}) {
+            if (!client || !isConnected) return alert("未连接");
+            client.publish('class_room/' + roomInput.value.trim().toUpperCase(), JSON.stringify({ cmd, ...extra }), { qos: 1 });
+        }
+
         function switchMode(mode) {
-            console.log(`🔄 请求切换模式: ${mode}`);
+            if (!isConnected) return alert("未连接");
+            document.querySelectorAll('.btn-mode').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('[id^="panel-"]').forEach(p => p.classList.add('hidden'));
+            document.getElementById(`btn-mode-${mode}`).classList.add('active');
             
-            if (mode === state.currentMode) {
-                console.log("ℹ️ 模式未变化，忽略");
-                return;
-            }
+            // 显示对应面板
+            const panelMap = {
+                'slideshow': 'panel-slideshow',
+                'staticA': 'panel-staticA',
+                'staticB': 'panel-staticB',
+                'video1': 'panel-video1',
+                'video2': 'panel-video2'
+            };
+            if(panelMap[mode]) document.getElementById(panelMap[mode]).classList.remove('hidden');
 
-            // 清理旧定时器
-            if (state.slideshowTimer) {
-                clearInterval(state.slideshowTimer);
-                state.slideshowTimer = null;
-            }
-
-            state.currentMode = mode;
-            localStorage.setItem('lastMode', mode); // 保存状态
+            currentMode = mode;
+            if(slideshowTimer) clearInterval(slideshowTimer);
+            slideshowTimer = null;
 
             if (mode === 'slideshow') {
-                console.log("✅ 进入轮播模式");
-                dom.status.innerText = "🚀 启动轮播...";
-                
-                // 重置索引以便从下一张开始，或者保持当前
-                if (state.currentSlideIndex === -1) state.currentSlideIndex = 0;
-                
-                // 立即执行一次
+                modeIndicator.className = 'active slideshow';
+                modeIndicator.innerText = '🖼️ 自动轮播 (全屏)';
+                currentSlideIndex = -1;
                 nextSlide();
-                
-                // 启动定时器
-                state.slideshowTimer = setInterval(() => {
-                    // 简单的日志，详细日志在 nextSlide 内部
-                    // console.log("⏰ 定时器心跳"); 
-                    nextSlide();
-                }, CONFIG.slideInterval);
-
-            } else if (mode === 'none') {
-                console.log("⏸️ 停止轮播");
-                dom.status.innerText = "⏸️ 已暂停";
-                state.currentSlideIndex = -1;
+                slideshowTimer = setInterval(nextSlide, currentSpeed);
+            } else if (mode === 'staticA') {
+                modeIndicator.className = 'active static-a';
+                modeIndicator.innerText = '🖼️ 展示组 A (全屏)';
+                loadFile(LIST_STATIC_A[0], 'images2/', 'image');
+            } else if (mode === 'staticB') {
+                modeIndicator.className = 'active static-b';
+                modeIndicator.innerText = '🖼️ 展示组 B (全屏)';
+                loadFile(LIST_STATIC_B[0], 'images3/', 'image');
+            } else if (mode === 'video1') {
+                modeIndicator.className = 'active video-1';
+                modeIndicator.innerText = '🎥 视频组 A (循环)';
+                loadFile(LIST_VIDEO_1[0], 'videos/', 'video');
+            } else if (mode === 'video2') {
+                modeIndicator.className = 'active video-2';
+                modeIndicator.innerText = '🎥 视频组 B (循环)';
+                loadFile(LIST_VIDEO_2[0], 'videos2/', 'video');
             }
         }
 
-        // ================= 优化后的 nextSlide (核心修复) =================
+        function updateSpeed(val) {
+            currentSpeed = val * 1000;
+            document.getElementById('speed-value').innerText = val + " 秒";
+            if (currentMode === 'slideshow' && slideshowTimer) {
+                clearInterval(slideshowTimer);
+                slideshowTimer = setInterval(nextSlide, currentSpeed);
+            }
+        }
+
         function nextSlide() {
-            // 1. 基础守卫
-            if (state.currentMode !== 'slideshow') {
-                // 静默返回，避免刷屏
-                return;
-            }
-
-            if (state.isPreloading) {
-                console.log("⏳ 正在加载中，标记为待处理");
-                state.nextSlidePending = true;
-                return;
-            }
-
-            // 2. 计算下一张
-            const nextIndex = (state.currentSlideIndex + 1) % CONFIG.fileList.length;
-            const nextFilename = CONFIG.fileList[nextIndex];
-            
-            // 动态构建 URL (添加时间戳防止缓存)
-            // 自动适配当前页面路径，防止子目录部署出错
-            const basePath = window.location.href.substring(0, window.location.href.lastIndexOf('/') + 1);
-            const nextUrl = basePath + CONFIG.imageFolder + nextFilename + '?t=' + Date.now();
-
-            console.log(`--- [Switch] ${state.currentSlideIndex} -> ${nextIndex} (${nextFilename}) ---`);
-
-            // 3. 设置状态
-            state.isPreloading = true;
-            dom.status.innerText = `⬇️ 预加载: ${nextFilename}...`;
-
-            // 4. 准备加载器
-            const loader = state.preloadImg;
-            
-            // 清除旧事件监听，防止累积
-            loader.onload = null;
-            loader.onerror = null;
-
-            // 绑定新事件
-            loader.onload = () => {
-                console.log(`✅ [Success] ${nextFilename}`);
-                
-                // 更新状态
-                state.isPreloading = false;
-                state.currentSlideIndex = nextIndex;
-                localStorage.setItem('lastSlideIndex', nextIndex); // 保存进度
-
-                // 切换主图
-                dom.mainImg.src = nextUrl;
-                dom.mainImg.classList.add('loaded'); // 确保显示
-                
-                dom.status.innerText = `✨ 显示中: ${nextFilename}`;
-
-                // 处理积压请求
-                if (state.nextSlidePending) {
-                    console.log("🔄 检测到积压，立即触发下一次");
-                    state.nextSlidePending = false;
-                    setTimeout(nextSlide, 100); // 稍微延迟避免栈溢出
-                }
-            };
-
-            loader.onerror = (e) => {
-                console.error(`❌ [Failed] ${nextFilename}`, e);
-                
-                state.isPreloading = false;
-                // 即使失败也更新索引，防止死锁在坏图上
-                state.currentSlideIndex = nextIndex;
-                localStorage.setItem('lastSlideIndex', nextIndex);
-
-                dom.status.innerText = `❌ 加载失败: ${nextFilename} (跳过)`;
-
-                // 尝试下一张
-                if (state.nextSlidePending) {
-                    state.nextSlidePending = false;
-                    setTimeout(nextSlide, 100);
-                } else {
-                    // 如果没有积压，也强制推进一步，避免卡住
-                    setTimeout(nextSlide, 1000); 
-                }
-            };
-
-            // 5. 发起请求
-            console.log(`🚀 请求: ${nextUrl}`);
-            loader.src = nextUrl;
+            if (currentMode !== 'slideshow') return;
+            currentSlideIndex = (currentSlideIndex + 1) % LIST_SLIDESHOW.length;
+            loadFile(LIST_SLIDESHOW[currentSlideIndex], 'images/', 'image', true);
         }
 
-        // ================= MQTT 连接逻辑 =================
-        function initMQTT() {
-            console.log("📡 正在连接 MQTT...", CONFIG.mqttBroker);
+        function loadFile(filename, folder, type, isSlide = false) {
+            const baseUrl = window.location.origin + window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/') + 1);
+            const fullUrl = `${baseUrl}${folder}${filename}?t=${new Date().getTime()}`;
+            const displayUrl = `${baseUrl}${folder}${filename}`;
             
-            // 注意：生产环境请使用安全的 wss 和正确的认证
-            const options = {
-                clientId: CONFIG.mqttClientID,
-                clean: true,
-                connectTimeout: 4000,
-                reconnectPeriod: 1000,
-            };
+            sendCmd('load', {
+                url: fullUrl,
+                originalUrl: displayUrl,
+                mediaType: type,
+                isSlideshow: isSlide,
+                index: isSlide ? currentSlideIndex : -1,
+                total: isSlide ? LIST_SLIDESHOW.length : -1
+            });
+        }
 
-            try {
-                const client = mqtt.connect(CONFIG.mqttBroker, options);
+        function handleData(data) {
+            if (data.cmd === 'load') {
+                mediaContainer.innerHTML = '';
+                mediaContainer.appendChild(modeIndicator);
 
-                client.on('connect', () => {
-                    console.log("✅ MQTT 连接成功");
-                    client.subscribe(CONFIG.mqttTopic, (err) => {
-                        if (!err) {
-                            console.log(`📩 已订阅主题: ${CONFIG.mqttTopic}`);
-                            
-                            // 连接成功后，检查是否需要恢复轮播
-                            if (localStorage.getItem('lastMode') === 'slideshow') {
-                                console.log("🔄 连接建立，恢复轮播模式");
-                                switchMode('slideshow');
-                            }
-                        } else {
-                            console.error("❌ 订阅失败", err);
-                        }
-                    });
-                });
+                if (data.mediaType === 'image') {
+                    const img = document.createElement('img');
+                    img.src = data.url;
+                    img.onerror = () => {
+                        mediaContainer.innerHTML = `<div class="error-box"><span class="error-title">❌ 图片加载失败</span><p>路径：${data.originalUrl}</p></div>`;
+                    };
+                    img.onload = () => {
+                        if (data.isSlideshow) modeIndicator.innerText = `🖼️ 轮播: ${data.index + 1}/${data.total}`;
+                    };
+                    mediaContainer.appendChild(img);
 
-                client.on('message', (topic, message) => {
-                    console.log(`📩 收到消息 [${topic}]:`, message.toString());
-                    handleMqttMessage(message.toString());
-                });
+                } else if (data.mediaType === 'video') {
+                    const v = document.createElement('video');
+                    v.src = data.url;
+                    v.autoplay = true;
+                    v.loop = true;
+                    v.muted = true;
+                    v.playsInline = true;
+                    v.controls = true;
+                    v.style.width = '100%';
+                    v.style.height = '100%';
+                    v.onclick = () => { v.muted = false; };
+                    
+                    v.onerror = () => {
+                         mediaContainer.innerHTML = `<div class="error-box"><span class="error-title">❌ 视频加载失败</span><p>路径：${data.originalUrl}</p><span class="error-tip">请检查文件夹 ${data.originalUrl.split('/')[data.originalUrl.split('/').length-2]} 是否存在。</span></div>`;
+                    };
 
-                client.on('error', (err) => {
-                    console.error("❌ MQTT 错误:", err);
-                    dom.status.innerText = "⚠️ 连接错误";
-                });
-
-                client.on('reconnect', () => {
-                    console.log("🔄 正在重连 MQTT...");
-                });
-
-            } catch (e) {
-                console.error("❌ MQTT 初始化失败:", e);
-                dom.status.innerText = "⚠️ MQTT 初始化失败";
+                    mediaContainer.appendChild(v);
+                    // 根据模式更新提示文字
+                    if(currentMode === 'video1') modeIndicator.innerText = "🎥 视频组 A (点击开声)";
+                    if(currentMode === 'video2') modeIndicator.innerText = "🎥 视频组 B (点击开声)";
+                }
+            } else if (data.cmd === 'play') {
+                const v = mediaContainer.querySelector('video');
+                if (v) v.play();
+            } else if (data.cmd === 'pause') {
+                const v = mediaContainer.querySelector('video');
+                if (v) v.pause();
+            } else if (data.cmd === 'stop') {
+                mediaContainer.innerHTML = '<h1 style="color:#444">等待指令</h1>';
+                modeIndicator.classList.remove('active');
+                if(slideshowTimer) clearInterval(slideshowTimer);
+                slideshowTimer = null;
+                currentMode = 'none';
+                document.querySelectorAll('.btn-mode').forEach(b => b.classList.remove('active'));
+                document.querySelectorAll('[id^="panel-"]').forEach(p => p.classList.add('hidden'));
             }
         }
 
-        function handleMqttMessage(payload) {
-            try {
-                // 支持 JSON 格式: {"action": "switchMode", "mode": "slideshow"}
-                // 也支持纯文本格式: "slideshow", "stop"
-                let data;
-                if (payload.startsWith('{')) {
-                    data = JSON.parse(payload);
-                } else {
-                    // 兼容简单文本指令
-                    const text = payload.toLowerCase();
-                    if (text.includes('slideshow') || text.includes('auto')) {
-                        data = { action: 'switchMode', mode: 'slideshow' };
-                    } else if (text.includes('stop') || text.includes('pause')) {
-                        data = { action: 'switchMode', mode: 'none' };
-                    } else {
-                        console.warn("⚠️ 未知指令格式:", payload);
-                        return;
-                    }
-                }
-
-                if (data.action === 'switchMode') {
-                    switchMode(data.mode);
-                } else {
-                    console.warn("⚠️ 未知动作:", data.action);
-                }
-
-            } catch (e) {
-                console.error("❌ 解析消息失败:", e, payload);
-            }
-        }
-
+        init();
     </script>
 </body>
 </html>
