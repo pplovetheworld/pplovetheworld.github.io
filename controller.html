@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>讲台控制器</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f0f2f5; padding: 20px; text-align: center; }
+        h2 { color: #333; }
+        .btn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 20px; }
+        button {
+            padding: 25px; font-size: 20px; border: none; border-radius: 12px;
+            color: white; cursor: pointer; box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            transition: transform 0.1s;
+        }
+        button:active { transform: scale(0.95); }
+        .btn-next { background: #007bff; grid-column: span 2; }
+        .btn-prev { background: #6c757d; }
+        .btn-play { background: #28a745; }
+        .btn-pause { background: #ffc107; color: #000; }
+        .status { margin-top: 20px; font-size: 14px; color: #666; }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
+</head>
+<body>
+
+<h2>🎛️ 讲台遥控</h2>
+<div class="btn-grid">
+    <button class="btn-prev" onclick="send('prev')">⏮ 上一个</button>
+    <button class="btn-play" onclick="send('play')">▶ 播放</button>
+    <button class="btn-pause" onclick="send('pause')">⏸ 暂停</button>
+    <button class="btn-next" onclick="send('next')">⏭ 下一个 / 切换 ⏭</button>
+</div>
+<div class="status" id="status">正在连接服务器...</div>
+
+<script>
+    // === 配置区域 (必须与 screen.html 一致) ===
+    const TOPIC_PREFIX = "school_demo_2026_";
+    const TARGET_SCREEN_ID = "screen_01"; // 要控制的屏幕ID
+    const TOPIC = TOPIC_PREFIX + TARGET_SCREEN_ID;
+    
+    const BROKER_URL = "ws://broker.emqx.io:8083/mqtt";
+
+    const statusDiv = document.getElementById('status');
+    const client = new Paho.MQTT.Client(BROKER_URL, "client_ctrl_" + Math.random());
+
+    function send(action) {
+        if (client.isConnected()) {
+            const message = new Paho.MQTT.Message(JSON.stringify({ action: action }));
+            message.destinationName = TOPIC;
+            client.send(message);
+            
+            // 手机震动反馈
+            if (navigator.vibrate) navigator.vibrate(50);
+        } else {
+            alert("未连接到服务器，请检查网络！");
+        }
+    }
+
+    client.onConnectionLost = function () {
+        statusDiv.innerText = "❌ 连接断开，正在重连...";
+        statusDiv.style.color = "red";
+        setTimeout(() => client.connect({onSuccess: onConnect}), 5000);
+    };
+
+    function onConnect() {
+        statusDiv.innerText = "✅ 已连接，可以控制";
+        statusDiv.style.color = "green";
+    }
+
+    client.connect({onSuccess: onConnect});
+</script>
+</body>
+</html>
